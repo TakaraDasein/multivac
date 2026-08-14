@@ -45,9 +45,9 @@ volume = 1.0
 
 [persona]
 # Cómo se dirige a ti. Cambia esto y cambia el trato en toda la conversación.
-tratamiento = "mi señor"
+tratamiento = "señor"
 # Rasgos de carácter, en una línea. Se inyectan en el prompt del sistema.
-caracter = "dulce, risueña y cálida, tranquila y de hablar sereno, atenta al detalle"
+caracter = "atenta, cercana y directa"
 
 [memory]
 # Turnos recientes que se incluyen literalmente en el contexto.
