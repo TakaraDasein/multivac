@@ -56,6 +56,7 @@ las demás.
 | Índice de apps | 148 ficheros `.desktop` del sistema | `multivac/core/tools/apps.py` |
 | Memoria | SQLite + sqlite-vec + `nomic-embed-text` | `multivac/core/memory.py` |
 | Voz | Piper `es_AR-daniela-high` (CPU) | `multivac/voice/tts.py` |
+| Troceado en frases | `SentenceBuffer`, compartido | `multivac/text.py` |
 
 ### Rendimiento real
 
@@ -64,9 +65,15 @@ Medido en un i7-12650H con RTX 4060 Laptop (8 GB):
 | Acción | Tarda |
 |---|---|
 | "abre X" / "busca Y" (router, sin LLM) | **0,08–0,13 s** |
-| Pregunta que necesita el modelo | **1,0–2,2 s** |
+| Empezar a hablar (primera frase) | **1,3–2,3 s** |
+| Respuesta completa | 2,9–4,4 s |
 | Primera frase tras un rato inactivo | ~6 s (recarga el modelo) |
 | Encender desde apagado | ~3 s |
+
+Multivac **habla mientras el modelo sigue escribiendo**: en cuanto cierra una
+frase, esa frase ya se sintetiza y suena. El silencio de espera baja de los 2,9-4,4 s
+que tarda la respuesta entera a 1,3-2,3 s — hasta **3,1 s menos** en respuestas
+largas.
 
 En reposo: **0,3 % de CPU** del equipo, 1,5 GB de RAM. Con el modelo cargado,
 6,5 GB de los 8 GB de VRAM.
@@ -235,7 +242,7 @@ cuánto tarda:
 
 | Modelo | Aciertos | Mediana | VRAM |
 |---|---|---|---|
-| **qwen3:8b** | **11/13** | **2,2 s** | 5,6 GB |
+| **qwen3:8b** | **12/13** | **2,4 s** | 5,6 GB |
 | qwen3:4b | 11/13 | 49 s | 2,5 GB |
 | qwen3:1.7b | 4/13 | 0,6 s | 1,7 GB |
 
@@ -257,6 +264,16 @@ sesión actual: las respuestas de sesiones viejas traen datos caducados ("la
 batería está al 75 %") que el modelo repetiría en vez de volver a medir. A largo
 plazo solo se indexan afirmaciones ("me llamo X"), nunca preguntas ni órdenes —
 si no, compiten en similitud con las preguntas futuras y desplazan a los hechos.
+
+**Se habla por frases, no por respuesta completa.** El agente entrega cada frase
+en cuanto el modelo la cierra (`on_sentence`), y `voice` las reproduce en **un
+único flujo de audio**: abrir un stream por frase metería un clic y un hueco
+entre ellas. Un `id` de enunciado evita que el `speaking_done` de una respuesta
+vieja reactive el micrófono en mitad de la siguiente.
+
+**Nada de frases de relleno.** El prompt prohíbe expresamente responder
+"Enseguida" o "Ahora mismo lo miro": el modelo lo hacía en lugar de llamar a la
+herramienta, y el banco de pruebas pasó de 10/13 a 12/13 al quitarlo.
 
 **Los emojis se filtran en el código**, no en el prompt. El prompt los prohíbe y
 el modelo los cuela igualmente; Piper los pronunciaría.

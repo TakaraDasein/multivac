@@ -7,22 +7,20 @@ las vamos reproduciendo: la respuesta empieza a sonar antes de estar completa.
 from __future__ import annotations
 
 import logging
-import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 import numpy as np
 import sounddevice as sd
 from piper import PiperVoice, SynthesisConfig
 
+from ..text import split_sentences
+
 log = logging.getLogger(__name__)
 
 VOICES_DIR = Path.home() / ".local/share/piper-voices"
-
-# Cortamos en puntuación fuerte; el límite de 2 caracteres evita partir por
-# abreviaturas o iniciales sueltas.
-_SENTENCE = re.compile(r"(?<=[.!?…])\s+(?=[¿¡A-ZÁÉÍÓÚÑ0-9])")
 
 
 @dataclass
@@ -38,11 +36,6 @@ class TtsConfig:
     # ordenada, menos atropellada.
     noise_w: float | None = None
     volume: float = 1.0
-
-
-def split_sentences(text: str) -> list[str]:
-    partes = [p.strip() for p in _SENTENCE.split(text) if p.strip()]
-    return partes or ([text.strip()] if text.strip() else [])
 
 
 class Speaker:
@@ -70,12 +63,45 @@ class Speaker:
         sd.stop()
 
     def say(self, text: str) -> None:
+        """Pronuncia un texto ya completo."""
+        self.say_stream(iter([text]))
+
+    def say_stream(self, frases: Iterable[str]) -> None:
+        """Pronuncia frases según van llegando del iterable.
+
+        Se abre UN solo OutputStream para todo el enunciado: abrir y cerrar uno
+        por frase mete un clic y un pequeño retardo entre ellas, y la respuesta
+        sonaría a trompicones en vez de continua. El iterable puede bloquear
+        entre frases —es justo lo que pasa mientras el modelo sigue escribiendo—
+        y el stream aguanta ese silencio sin cortarse.
+        """
         self._stop = False
-        with sd.OutputStream(samplerate=self.rate, channels=1, dtype="int16") as stream:
-            for chunk in self._synthesize(text):
+        stream: sd.OutputStream | None = None
+        try:
+            for frase in frases:
                 if self._stop:
                     break
-                stream.write(chunk)
+                frase = frase.strip()
+                if not frase:
+                    continue
+                for audio in self._synthesize(frase):
+                    if self._stop:
+                        break
+                    # El stream se abre con la primera frase, no antes: así no
+                    # se retiene el dispositivo de audio mientras se piensa.
+                    if stream is None:
+                        stream = sd.OutputStream(
+                            samplerate=self.rate, channels=1, dtype="int16"
+                        )
+                        stream.start()
+                    stream.write(audio)
+        finally:
+            if stream is not None:
+                if not self._stop:
+                    # Sin esto se cortaría la última sílaba: write() solo encola.
+                    time.sleep(stream.latency)
+                stream.stop()
+                stream.close()
 
     def _synthesize(self, text: str) -> Iterator[np.ndarray]:
         for sentence in split_sentences(text):

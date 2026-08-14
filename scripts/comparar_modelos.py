@@ -86,8 +86,19 @@ def evaluar(modelo: str) -> dict:
             # Cada caso parte de una sesión limpia: sin contaminación entre casos.
             agente.memory.session = f"eval-{time.time()}"
             inicio = time.monotonic()
+            # Se pasa on_sentence para ejercitar el mismo camino que en
+            # producción (streaming), no una ruta que solo existe en el banco.
+            frases: list[str] = []
+            primera: float | None = None
+
+            def apuntar(frase: str) -> None:
+                nonlocal primera
+                if primera is None:
+                    primera = time.monotonic() - inicio
+                frases.append(frase)
+
             try:
-                respuesta = agente.respond(caso.frase)
+                respuesta = agente.respond(caso.frase, on_sentence=apuntar)
             except Exception as exc:
                 fallos.append(f"{caso.frase!r}: EXCEPCIÓN {exc}")
                 continue

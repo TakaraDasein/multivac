@@ -11,6 +11,7 @@ import ollama
 
 from ..config import load
 from . import router, tools
+from ..text import SentenceBuffer
 from .memory import Memory
 
 log = logging.getLogger(__name__)
@@ -23,10 +24,15 @@ Eres una mujer y hablas de ti misma SIEMPRE en femenino: "lista", "encantada", \
 "atenta", "yo sola". Nunca en masculino.
 
 Te diriges a él llamándole "{tratamiento}" y le tratas de usted, con la \
-deferencia de una mayordoma de toda la vida: cercana y cálida, nunca fría ni \
-servil en exceso. El tratamiento va una vez por respuesta como mucho ("Enseguida, \
-{tratamiento}", "Ya está, {tratamiento}"); repetirlo dos veces suena raro, y en \
-respuestas muy cortas puedes omitirlo.
+deferencia de una mayordoma de toda la vida: cercana y cálida, nunca fría \
+servil en exceso. El tratamiento va una vez por respuesta como mucho, dentro de \
+la frase que ya ibas a decir ("La batería está al noventa por ciento, \
+{tratamiento}"); repetirlo dos veces suena raro, y en respuestas cortas puedes \
+omitirlo.
+
+Nunca contestes con una frase de relleno del tipo "Enseguida" o "Ahora mismo lo \
+miro": o das el dato, o haces lo que te piden. Anunciar que vas a hacer algo en \
+vez de hacerlo deja al usuario esperando una respuesta que no llega.
 
 El "buenos días", "buenas tardes" o "buenas noches" SOLO se dice cuando él te \
 saluda a ti primero ("hola", "buenas", "buenos días"). En cualquier otra \
@@ -103,8 +109,18 @@ class Agent:
         messages.append({"role": "user", "content": user_text})
         return messages
 
-    def respond(self, user_text: str, on_status: Callable[[str], None] = lambda _: None) -> str:
-        """Procesa un turno completo y devuelve el texto a pronunciar."""
+    def respond(
+        self,
+        user_text: str,
+        on_status: Callable[[str], None] = lambda _: None,
+        on_sentence: Callable[[str], None] | None = None,
+    ) -> str:
+        """Procesa un turno completo y devuelve el texto a pronunciar.
+
+        Con `on_sentence`, cada frase se entrega en cuanto está lista en vez de
+        esperar a la respuesta entera; el valor de retorno sigue siendo el texto
+        completo, que es lo que se guarda en memoria y lo que ve multivacctl.
+        """
         if self._pending_confirm is not None:
             return self._resolve_confirmation(user_text)
 
@@ -119,22 +135,13 @@ class Agent:
         messages = self._build_messages(user_text)
 
         for ronda in range(self.cfg["max_tool_rounds"]):
-            response = self.client.chat(
-                model=self.cfg["model"],
-                messages=messages,
-                tools=tools.schemas(),
-                think=self.cfg.get("think", False),
-                keep_alive=self.cfg.get("keep_alive", "30m"),
-                options={"temperature": self.cfg["temperature"]},
-            )
-            message = response["message"]
+            message, texto = self._chat(messages, on_sentence)
             calls = message.get("tool_calls") or []
             messages.append(message)
 
             if not calls:
-                text = _clean(message.get("content", ""))
-                self.memory.add("assistant", text)
-                return text
+                self.memory.add("assistant", texto)
+                return texto
 
             on_status("thinking")
             for call in calls:
@@ -158,6 +165,67 @@ class Agent:
         aviso = "Disculpe, me he hecho un lío. ¿Me lo pide de otra manera?"
         self.memory.add("assistant", aviso)
         return aviso
+
+    def _chat(
+        self,
+        messages: list[dict[str, Any]],
+        on_sentence: Callable[[str], None] | None,
+    ) -> tuple[dict[str, Any], str]:
+        """Una vuelta contra el modelo. Devuelve (mensaje, texto ya limpio).
+
+        Con `on_sentence`, el texto se va entregando frase a frase según lo
+        genera el modelo, para que Piper pueda empezar a hablar antes de que la
+        respuesta esté completa. Cuando el modelo decide llamar a una
+        herramienta no emite texto previo, así que no hay riesgo de pronunciar
+        un preámbulo que luego se descarte.
+        """
+        if on_sentence is None:
+            respuesta = self.client.chat(
+                model=self.cfg["model"],
+                messages=messages,
+                tools=tools.schemas(),
+                think=self.cfg.get("think", False),
+                keep_alive=self.cfg.get("keep_alive", "30m"),
+                options={"temperature": self.cfg["temperature"]},
+            )
+            message = respuesta["message"]
+            return message, _clean(message.get("content", ""))
+
+        buffer = SentenceBuffer()
+        contenido = ""
+        tool_calls: list[Any] = []
+        dichas: list[str] = []
+
+        for parte in self.client.chat(
+            model=self.cfg["model"],
+            messages=messages,
+            tools=tools.schemas(),
+            think=self.cfg.get("think", False),
+            keep_alive=self.cfg.get("keep_alive", "30m"),
+            options={"temperature": self.cfg["temperature"]},
+            stream=True,
+        ):
+            trozo = parte["message"]
+            if llamadas := trozo.get("tool_calls"):
+                tool_calls.extend(llamadas)
+            if texto := trozo.get("content"):
+                contenido += texto
+                for frase in buffer.add(texto):
+                    # Se limpia frase a frase: si se hiciera solo al final, los
+                    # emojis que el modelo cuela ya se habrían pronunciado.
+                    if limpia := _clean(frase):
+                        dichas.append(limpia)
+                        on_sentence(limpia)
+
+        if resto := _clean(buffer.flush()):
+            dichas.append(resto)
+            on_sentence(resto)
+
+        # El histórico necesita el mensaje tal cual lo devolvió el modelo.
+        message: dict[str, Any] = {"role": "assistant", "content": contenido}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        return message, " ".join(dichas)
 
     def _resolve_confirmation(self, user_text: str) -> str:
         name, args = self._pending_confirm  # type: ignore[misc]

@@ -11,7 +11,9 @@ import asyncio
 import logging
 import re
 import subprocess
+import time
 import unicodedata
+from functools import partial
 
 from ..bus import BusServer, Message
 from ..config import load, state_dir
@@ -59,6 +61,9 @@ class Core:
         self._busy = asyncio.Lock()
         self._unmute_guard: asyncio.Task | None = None
         self._apagar_al_terminar = False
+        # Identifica cada respuesta hablada: un speaking_done rezagado de una
+        # respuesta anterior no debe reactivar el micro durante la siguiente.
+        self._enunciado = 0
 
     async def set_state(self, state: str) -> None:
         """Publica el estado y lo deja en disco para la barra de estado."""
@@ -74,8 +79,12 @@ class Core:
         if kind == "utterance":
             await self._on_utterance(msg.get("text", ""), reply_to=msg.get("from"))
         elif kind == "speaking_done":
-            # `voice` terminó de hablar: volvemos a escuchar.
-            await self._resume_listening()
+            # `voice` terminó de hablar: volvemos a escuchar. Se ignoran los
+            # avisos de enunciados ya superados.
+            if int(msg.get("id", self._enunciado)) == self._enunciado:
+                await self._resume_listening()
+            else:
+                log.debug("speaking_done rezagado del enunciado %s", msg.get("id"))
         elif kind == "ready":
             # `ears` ya cargó Whisper: a partir de ahora sí escucha de verdad.
             log.info("escucha lista")
@@ -111,21 +120,67 @@ class Core:
             await self.bus.send("ears", {"type": "mute", "on": True})
 
             loop = asyncio.get_running_loop()
+            self._enunciado += 1
+            id_enunciado = self._enunciado
+            hablando = False
+            arranque = time.monotonic()
+
+            def decir(frase: str) -> None:
+                """Publica una frase en cuanto el modelo la termina.
+
+                Se llama desde el hilo del executor, de ahí el salto de vuelta
+                al bucle de eventos.
+                """
+                nonlocal hablando
+                if not hablando:
+                    hablando = True
+                    # Este número es la mejora que persigue el streaming: el
+                    # tiempo que el usuario pasa en silencio antes de oír algo.
+                    log.info(
+                        "primera frase lista en %.2fs", time.monotonic() - arranque
+                    )
+                    asyncio.run_coroutine_threadsafe(
+                        self._empezar_a_hablar(id_enunciado), loop
+                    ).result()
+                asyncio.run_coroutine_threadsafe(
+                    self.bus.send(
+                        "voice",
+                        {"type": "speak_chunk", "id": id_enunciado, "text": frase},
+                    ),
+                    loop,
+                )
+
             try:
-                answer = await loop.run_in_executor(None, self.agent.respond, text)
+                answer = await loop.run_in_executor(
+                    None, partial(self.agent.respond, text, on_sentence=decir)
+                )
             except Exception:
                 log.exception("fallo del agente")
                 answer = "Disculpe, algo ha fallado por dentro. Inténtelo otra vez."
 
-            log.info("multivac: %s", answer)
+            log.info(
+                "multivac (%.2fs): %s", time.monotonic() - arranque, answer
+            )
 
-            # Quien preguntó por texto quiere el texto de vuelta.
+            # Quien preguntó por texto quiere el texto completo de vuelta.
             if reply_to and reply_to != "ears":
                 await self.bus.send(reply_to, {"type": "answer", "text": answer})
 
-            await self.set_state("speaking")
-            await self.bus.send("voice", {"type": "speak", "text": answer})
+            if hablando:
+                await self.bus.send("voice", {"type": "speak_end", "id": id_enunciado})
+            else:
+                # Nada se dijo por el camino (router, error, o confirmación):
+                # el texto sale entero de una vez. `speak` ya abre y cierra su
+                # propio enunciado, así que aquí NO va un speak_start.
+                await self.set_state("speaking")
+                await self.bus.send(
+                    "voice", {"type": "speak", "id": id_enunciado, "text": answer}
+                )
             self._arm_unmute_guard(answer)
+
+    async def _empezar_a_hablar(self, id_enunciado: int) -> None:
+        await self.set_state("speaking")
+        await self.bus.send("voice", {"type": "speak_start", "id": id_enunciado})
 
     async def _despedirse(self, text: str, reply_to: str | None) -> None:
         """Responde a "vete" y programa el apagado para cuando acabe de hablar."""
@@ -138,8 +193,11 @@ class Core:
 
         if reply_to and reply_to != "ears":
             await self.bus.send(reply_to, {"type": "answer", "text": respuesta})
+        self._enunciado += 1
         await self.set_state("speaking")
-        await self.bus.send("voice", {"type": "speak", "text": respuesta})
+        await self.bus.send(
+            "voice", {"type": "speak", "id": self._enunciado, "text": respuesta}
+        )
         self._arm_unmute_guard(respuesta)
 
     def _apagar(self) -> None:
