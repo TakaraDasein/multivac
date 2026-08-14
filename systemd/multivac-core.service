@@ -1,0 +1,25 @@
+[Unit]
+Description=Multivac — orquestador y bus
+# graphical-session en vez de default.target: uwsm lo activa DESPUÉS de exportar
+# el entorno de Hyprland. Enganchado a default.target, el servicio arrancaría sin
+# HYPRLAND_INSTANCE_SIGNATURE y no podría abrir aplicaciones.
+After=graphical-session.target
+PartOf=graphical-session.target
+# Arrancar el core levanta los otros dos; pararlo (PartOf en ellos) los para.
+# Así "systemctl --user start multivac-core" es el único comando necesario.
+Wants=multivac-ears.service multivac-voice.service
+# Ollama es un servicio del SISTEMA: una unidad de usuario no puede declararlo
+# como dependencia (systemd falla con "Unit ollama.service not found"). Ya
+# arranca solo con el equipo, y si no estuviera, el agente devuelve un error
+# controlado en vez de caerse.
+
+[Service]
+Type=simple
+WorkingDirectory=%h/1.Cyborg-Town/2.Daten-Town/Multivac/multivac
+ExecStart=%h/1.Cyborg-Town/2.Daten-Town/Multivac/multivac/.venv/bin/python -m multivac.core
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical-session.target

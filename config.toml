@@ -1,0 +1,72 @@
+[wake]
+# Modelos preentrenados de openWakeWord. "hey_jarvis" es el más cercano a
+# "Multivac" que viene de serie; para una palabra propia, ver scripts/README.
+models = ["hey_jarvis"]
+threshold = 0.5
+# Segundos de silencio (según VAD) que cierran la captura de una frase.
+silence_timeout = 0.7
+# Corte duro por si el VAD nunca detecta silencio (ruido de fondo continuo).
+max_utterance = 15.0
+
+[stt]
+model = "small"          # tiny | base | small | medium
+device = "cuda"
+compute_type = "int8_float16"
+language = "es"
+beam_size = 1
+
+[llm]
+host = "http://127.0.0.1:11434"
+model = "qwen3:8b"
+embed_model = "nomic-embed-text"
+temperature = 0.6
+max_tool_rounds = 5
+# Cuánto sigue el modelo en VRAM sin usarse. Es el compromiso del día a día:
+#   "5m"  → libera 5,6 GB pronto; la primera frase tras un rato tarda ~6 s
+#   "30m" → casi siempre responde en 2-3 s, ocupando la VRAM mientras tanto
+#   "-1"  → no lo suelta nunca (mala idea si juegas o editas vídeo)
+# Si necesitas la GPU para otra cosa: `ollama stop qwen3:8b`.
+keep_alive = "30m"
+# qwen3 razona por defecto; para un asistente de voz la latencia manda.
+think = false
+
+[tts]
+voice = "es_AR-daniela-high"
+# Por debajo de 1 habla más despacio: da sensación de calma y buena dicción.
+speed = 0.88
+# Variabilidad de la entonación. Bajo = suave y uniforme (por defecto 0.667).
+noise_scale = 0.45
+# Variabilidad de la duración de los fonemas. Bajo = habla ordenada, sin
+# atropellarse (por defecto 0.8).
+noise_w = 0.55
+volume = 1.0
+# Para modelos con varias voces dentro (es_ES-sharvard-medium: M=0, F=1).
+# speaker = 1
+
+[persona]
+# Cómo se dirige a ti. Cambia esto y cambia el trato en toda la conversación.
+tratamiento = "mi señor"
+# Rasgos de carácter, en una línea. Se inyectan en el prompt del sistema.
+caracter = "dulce, risueña y cálida, tranquila y de hablar sereno, atenta al detalle"
+
+[memory]
+# Turnos recientes que se incluyen literalmente en el contexto.
+recent_turns = 6
+# Fragmentos recuperados por similitud semántica.
+recall_k = 3
+
+[shell]
+# Multivac solo puede abrir aplicaciones y buscar en la web. No tiene ninguna
+# herramienta que borre, instale, apague o modifique la configuración, y estas
+# listas son la segunda barrera por si el modelo intentara algo raro.
+#
+# Binarios que puede invocar directamente.
+allowlist = ["hyprctl", "notify-send"]
+
+# `hyprctl dispatch exec` puede lanzar cualquier programa, así que se acota qué
+# dispatchers se admiten...
+hypr_dispatchers = ["exec"]
+
+# ...y qué binarios puede lanzar `exec`. Aquí está el límite real de lo que
+# Multivac es capaz de hacer en el ordenador.
+exec_allowlist = ["gtk-launch", "brave"]

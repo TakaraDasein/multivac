@@ -1,0 +1,20 @@
+# Entorno virtual: se reconstruye con `uv sync` desde uv.lock
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Los modelos (Piper, Whisper, Ollama) pesan gigas y se descargan aparte;
+# scripts/setup.sh los recupera.
+*.onnx
+*.onnx.json
+
+# El historial de conversaciones vive en ~/.local/state/multivac/, fuera del
+# repositorio, pero por si alguien lo copia aquí:
+*.db
+*.sqlite3
+
+# Config local con ajustes personales (el config.toml del repo es la plantilla)
+config.local.toml

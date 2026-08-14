@@ -1,0 +1,30 @@
+[project]
+name = "multivac"
+version = "0.1.0"
+description = "Asistente de voz local: wake word, STT, LLM con herramientas y TTS"
+# 3.11 y no 3.12+: tflite-runtime (dependencia de openwakeword) solo publica
+# ruedas hasta cp311.
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "openwakeword>=0.6.0",
+    "faster-whisper>=1.1.0",
+    "sounddevice>=0.5.1",
+    "numpy>=1.26,<2.2",
+    "onnxruntime>=1.20",
+    "ollama>=0.4.7",
+    "piper-tts>=1.2.0",
+    "sqlite-vec>=0.1.6",
+    "psutil>=6.1.0",
+    "nvidia-cublas-cu12>=12.9.2.10",
+    "nvidia-cudnn-cu12>=9.24.0.43",
+]
+
+[project.scripts]
+multivacctl = "multivac.ctl:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["multivac"]

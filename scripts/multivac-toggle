@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Botón de waybar (y del atajo de teclado):
+#   - apagado  → lo enciende
+#   - encendido→ dispara una escucha (push-to-talk)
+# Con el argumento "off" siempre apaga.
+set -uo pipefail
+
+UNIDAD=multivac-core.service
+STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/multivac/state"
+
+apagar() {
+  notify-send -a Multivac -i audio-input-microphone "Multivac" "Apagando…"
+  # Soltar los modelos libera ~6 GB de VRAM al instante, que es el motivo
+  # principal de apagarlo (jugar, editar vídeo).
+  ollama stop qwen3:8b >/dev/null 2>&1
+  ollama stop nomic-embed-text >/dev/null 2>&1
+  systemctl --user stop "$UNIDAD"
+  echo off > "$STATE_FILE" 2>/dev/null
+}
+
+encender() {
+  notify-send -a Multivac -i audio-input-microphone "Multivac" "Despertando…"
+  systemctl --user start "$UNIDAD"
+
+  # `ears` tarda unos segundos en cargar Whisper; hasta entonces no oye nada.
+  # Se espera a que el core publique su estado antes de avisar de que ya está.
+  for _ in $(seq 1 40); do
+    # "idle" solo aparece cuando ears confirma que Whisper está cargado;
+    # is-active llega demasiado pronto y avisaría antes de tiempo.
+    if [[ -r $STATE_FILE && $(<"$STATE_FILE") == "idle" ]]; then
+      notify-send -a Multivac -i audio-input-microphone "Multivac" \
+        "Lista. Diga «Hey Jarvis» o pulse SUPER+M."
+      return 0
+    fi
+    sleep 0.5
+  done
+  notify-send -a Multivac -u critical "Multivac" \
+    "Tarda en arrancar. Mire: journalctl --user -u multivac-ears -e"
+}
+
+case "${1:-toggle}" in
+  off)  apagar ;;
+  on)   encender ;;
+  *)
+    if systemctl --user is-active --quiet "$UNIDAD"; then
+      # Ya está en marcha: el clic sirve para hablarle sin usar la palabra clave.
+      multivacctl escucha
+    else
+      encender
+    fi
+    ;;
+esac

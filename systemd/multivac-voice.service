@@ -1,0 +1,16 @@
+[Unit]
+Description=Multivac — síntesis de voz
+After=multivac-core.service graphical-session.target pipewire.service
+Requires=multivac-core.service
+PartOf=multivac-core.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/1.Cyborg-Town/2.Daten-Town/Multivac/multivac
+ExecStart=%h/1.Cyborg-Town/2.Daten-Town/Multivac/multivac/.venv/bin/python -m multivac.voice
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical-session.target
