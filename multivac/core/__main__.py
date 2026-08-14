@@ -14,7 +14,7 @@ import subprocess
 import unicodedata
 
 from ..bus import BusServer, Message
-from ..config import state_dir
+from ..config import load, state_dir
 from .agent import Agent
 
 log = logging.getLogger("multivac.core")
@@ -36,10 +36,13 @@ DESPEDIDA = re.compile(
     r"(?:\s+(?:multivac|por favor|ya|gracias))*[.!]?$"
 )
 
+# El tratamiento sale de config.toml, igual que en el resto de respuestas: si
+# estuviera escrito aquí, cambiar `persona.tratamiento` no afectaría a las
+# despedidas.
 DESPEDIDAS_HABLADAS = [
-    "Hasta luego, mi señor. Aquí estaré cuando me necesite.",
-    "Como usted diga. Que descanse, mi señor.",
-    "Me retiro. Llámeme cuando quiera, mi señor.",
+    "Hasta luego, {tratamiento}. Aquí estaré cuando me necesite.",
+    "Como usted diga. Que descanse, {tratamiento}.",
+    "Me retiro. Llámeme cuando quiera, {tratamiento}.",
 ]
 
 
@@ -129,7 +132,8 @@ class Core:
         import random
 
         log.info("usuario: %s (despedida)", text)
-        respuesta = random.choice(DESPEDIDAS_HABLADAS)
+        tratamiento = load().get("persona", {}).get("tratamiento", "señor")
+        respuesta = random.choice(DESPEDIDAS_HABLADAS).format(tratamiento=tratamiento)
         self._apagar_al_terminar = True
 
         if reply_to and reply_to != "ears":
