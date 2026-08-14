@@ -1,24 +1,7 @@
 #!/usr/bin/env bash
-# Estado de Multivac para waybar (JSON en una línea).
-# El estado lo escribe multivac-core en $XDG_STATE_HOME/multivac/state.
+# Módulo de waybar: estado de Multivac y onda de su voz.
+# Emite JSON en continuo (el módulo va sin "interval"); ver multivac/bar.py.
 set -uo pipefail
 
-STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/multivac/state"
-
-if ! systemctl --user is-active --quiet multivac-core.service; then
-  printf '{"text":"parado","alt":"off","class":"off","tooltip":"Multivac parado"}\n'
-  exit 0
-fi
-
-estado="idle"
-[[ -r $STATE_FILE ]] && estado=$(<"$STATE_FILE")
-
-case "$estado" in
-  starting)  tooltip="Multivac arrancando…" ;;
-  listening) tooltip="Multivac escuchando" ;;
-  thinking)  tooltip="Multivac pensando" ;;
-  speaking)  tooltip="Multivac hablando" ;;
-  *)         estado="idle"; tooltip="Multivac en espera" ;;
-esac
-
-printf '{"text":"","alt":"%s","class":"%s","tooltip":"%s"}\n' "$estado" "$estado" "$tooltip"
+RAIZ=$(dirname "$(dirname "$(readlink -f "$0")")")
+exec "$RAIZ/.venv/bin/python" -m multivac.bar

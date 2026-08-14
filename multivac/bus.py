@@ -81,9 +81,17 @@ class BusServer:
         except (ConnectionResetError, BrokenPipeError):
             self._clients.pop(role, None)
 
-    async def broadcast(self, msg: Message) -> None:
+    async def broadcast(self, msg: Message, prefix: str | None = None) -> None:
+        """Difunde a todos, o solo a los roles que empiecen por `prefix`.
+
+        El prefijo existe para los clientes que pueden estar repetidos: waybar
+        levanta un módulo por monitor, y como el hub guarda una conexión por
+        rol, con un nombre fijo el segundo dejaría mudo al primero. Cada uno se
+        anuncia como `bar-<pid>` y aquí se les habla a todos.
+        """
         for role in list(self._clients):
-            await self.send(role, msg)
+            if prefix is None or role.startswith(prefix):
+                await self.send(role, msg)
 
 
 class BusClient:

@@ -93,6 +93,10 @@ class Core:
             # Push-to-talk desde el atajo de teclado, vía multivacctl.
             await self.bus.send("ears", {"type": "listen"})
             await self.set_state("listening")
+        elif kind == "level":
+            # Volumen instantáneo de la voz, para la onda de la barra. Va solo
+            # a las barras: si no hay ninguna, se descarta sin coste.
+            await self.bus.broadcast(msg, prefix="bar-")
         elif kind == "ping":
             await self.bus.send(msg.get("from", "ctl"), {"type": "pong"})
         else:

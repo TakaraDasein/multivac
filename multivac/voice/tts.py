@@ -10,7 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Callable, Iterable, Iterator
 
 import numpy as np
 import sounddevice as sd
@@ -21,6 +21,13 @@ from ..text import split_sentences
 log = logging.getLogger(__name__)
 
 VOICES_DIR = Path.home() / ".local/share/piper-voices"
+
+# Tamaño del bloque con el que se alimenta la tarjeta de sonido: ~46 ms a
+# 22 kHz. Piper devuelve trozos de duración arbitraria (una frase entera puede
+# venir de golpe), y de ahí no se puede sacar el nivel instantáneo de la voz.
+# Troceando a bloques fijos, cada `write` bloquea hasta que hay hueco en el
+# búfer, así que el ritmo al que se miden los niveles es el ritmo al que suenan.
+BLOQUE = 1024
 
 
 @dataclass
@@ -56,11 +63,24 @@ class Speaker:
         )
         self.rate = self.voice.config.sample_rate
         self._stop = False
+        # Se llama con el volumen (0..1) de cada bloque que suena, desde el hilo
+        # de reproducción. Lo usa la barra de estado para dibujar la onda.
+        self.on_level: Callable[[float], None] | None = None
 
     def stop(self) -> None:
         """Corta la reproducción en curso (para poder interrumpir a Multivac)."""
         self._stop = True
         sd.stop()
+        self._nivel(0.0)
+
+    def _nivel(self, valor: float) -> None:
+        if self.on_level is None:
+            return
+        try:
+            self.on_level(valor)
+        except Exception:
+            # Un fallo pintando la onda no puede callar a Multivac.
+            log.debug("on_level falló", exc_info=True)
 
     def say(self, text: str) -> None:
         """Pronuncia un texto ya completo."""
@@ -94,7 +114,7 @@ class Speaker:
                             samplerate=self.rate, channels=1, dtype="int16"
                         )
                         stream.start()
-                    stream.write(audio)
+                    self._reproducir(stream, audio)
         finally:
             if stream is not None:
                 if not self._stop:
@@ -102,6 +122,18 @@ class Speaker:
                     time.sleep(stream.latency)
                 stream.stop()
                 stream.close()
+            self._nivel(0.0)
+
+    def _reproducir(self, stream: sd.OutputStream, audio: np.ndarray) -> None:
+        """Envía el audio en bloques y va publicando el volumen de cada uno."""
+        for inicio in range(0, len(audio), BLOQUE):
+            if self._stop:
+                return
+            bloque = audio[inicio : inicio + BLOQUE]
+            stream.write(bloque)
+            # RMS normalizado al fondo de escala de int16.
+            rms = float(np.sqrt(np.mean(np.square(bloque.astype(np.float32)))))
+            self._nivel(min(1.0, rms / 32768.0))
 
     def _synthesize(self, text: str) -> Iterator[np.ndarray]:
         for sentence in split_sentences(text):

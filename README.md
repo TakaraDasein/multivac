@@ -57,6 +57,7 @@ las demás.
 | Memoria | SQLite + sqlite-vec + `nomic-embed-text` | `multivac/core/memory.py` |
 | Voz | Piper `es_AR-daniela-high` (CPU) | `multivac/voice/tts.py` |
 | Troceado en frases | `SentenceBuffer`, compartido | `multivac/text.py` |
+| Barra de estado | módulo de waybar con la onda de la voz | `multivac/bar.py` |
 
 ### Rendimiento real
 
@@ -99,20 +100,34 @@ Luego, para el botón de la barra y el atajo de teclado:
 
 ```jsonc
 "custom/multivac": {
+  // Sin "interval": el script emite en continuo (icono + onda de la voz).
   "exec": "multivac-waybar",
   "return-type": "json",
-  "interval": 1,
-  "format": "{icon}",
-  "format-icons": {
-    "off": "󰍮", "starting": "󰔟", "idle": "󰍬",
-    "listening": "󰋎", "thinking": "󰔟", "speaking": "󰔊"
-  },
+  "format": "{}",
   "tooltip": true,
   "on-click": "multivac-toggle",
   "on-click-right": "multivac-toggle off"
 }
 ```
 Añade `"custom/multivac"` a `modules-left`, y reinicia con `omarchy restart waybar`.
+
+El módulo pinta el icono del estado y, cuando Multivac habla, la onda de su voz
+en bloques Unicode (necesita una Nerd Font). Para que sea una píldora que se
+abre al hablar, en `style.css`:
+
+```css
+#custom-multivac {
+  border-radius: 999px;
+  background: transparent;
+  transition: background-color 200ms ease, padding 200ms ease;
+}
+#custom-multivac.listening,
+#custom-multivac.thinking,
+#custom-multivac.speaking {
+  padding: 0 10px;
+  background-color: rgba(255, 255, 255, 0.07);
+}
+```
 </details>
 
 <details>

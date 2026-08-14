@@ -93,6 +93,15 @@ async def main() -> None:
     await bus.connect()
     loop = asyncio.get_running_loop()
 
+    def publicar_nivel(valor: float) -> None:
+        # Desde el hilo de reproducción, ~21 veces por segundo. Se redondea a
+        # dos decimales para no engordar cada línea del bus sin necesidad.
+        asyncio.run_coroutine_threadsafe(
+            bus.send({"type": "level", "v": round(valor, 2)}), loop
+        )
+
+    speaker.on_level = publicar_nivel
+
     def avisar_terminado(id_enunciado: int) -> None:
         # Se llama desde el hilo del reproductor: hay que volver al bucle.
         asyncio.run_coroutine_threadsafe(
