@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import shlex
 import subprocess
 import time
 import unicodedata
@@ -21,7 +22,7 @@ from .agent import Agent
 
 log = logging.getLogger("multivac.core")
 
-STATE_FILE = state_dir() / "state"  # lo lee el módulo de waybar
+STATE_FILE = state_dir() / "state"  # lo leen el widget de la barra y multivac-toggle
 
 # Órdenes de despedida: apagan los tres servicios y liberan la GPU. Se detectan
 # aquí y no en el agente porque apagarse no es una herramienta más — hay que
@@ -61,17 +62,29 @@ class Core:
         self._busy = asyncio.Lock()
         self._unmute_guard: asyncio.Task | None = None
         self._apagar_al_terminar = False
+        # Último estado publicado. Se guarda porque decidir si una frase nueva
+        # interrumpe o se descarta depende de si estamos hablando o pensando.
+        self._estado = "off"
         # Identifica cada respuesta hablada: un speaking_done rezagado de una
         # respuesta anterior no debe reactivar el micro durante la siguiente.
         self._enunciado = 0
 
     async def set_state(self, state: str) -> None:
         """Publica el estado y lo deja en disco para la barra de estado."""
+        self._estado = state
         try:
             STATE_FILE.write_text(state)
         except OSError:
             pass
         await self.bus.broadcast({"type": "state", "state": state})
+
+    async def _a_chat(self, msg: Message) -> None:
+        """Difunde a los clientes de chat, igual que `level` va a las barras.
+
+        Si no hay ninguno conectado, `broadcast` no encuentra roles con el
+        prefijo y no cuesta nada.
+        """
+        await self.bus.broadcast(msg, prefix="chat-")
 
     async def handle(self, msg: Message) -> None:
         kind = msg.get("type")
@@ -89,6 +102,10 @@ class Core:
             # `ears` ya cargó Whisper: a partir de ahora sí escucha de verdad.
             log.info("escucha lista")
             await self.set_state("idle")
+        elif kind == "stop":
+            # Cualquiera puede mandar callar: el atajo de teclado, la barra o
+            # una ventana de chat.
+            await self._interrumpir()
         elif kind == "listen":
             # Push-to-talk desde el atajo de teclado, vía multivacctl.
             await self.bus.send("ears", {"type": "listen"})
@@ -106,12 +123,23 @@ class Core:
         text = text.strip()
         if not text:
             # Escucha que no produjo nada (silencio o ruido): volvemos a idle.
-            if not self._busy.locked():
+            # Si está hablando o pensando, el estado lo gobierna ese turno.
+            if not self._busy.locked() and self._estado != "speaking":
                 await self.set_state("idle")
             return
         if self._busy.locked():
-            log.info("ocupado, descarto: %r", text)
+            # El lock solo sigue tomado mientras se piensa: la llamada al LLM
+            # es bloqueante y no hay forma limpia de abortarla a mitad, así que
+            # la frase se pierde. Al hablar el lock ya está libre y se cae en
+            # la interrupción de abajo.
+            log.info("pensando todavía, descarto: %r", text)
             return
+
+        # Hablando: manda la frase nueva. Cortamos el enunciado en curso en vez
+        # de dejar que se solapen dos voces.
+        await self._interrumpir()
+
+        await self._a_chat({"type": "chat_user", "text": text})
 
         if DESPEDIDA.match(_normalizar(text)):
             await self._despedirse(text, reply_to)
@@ -147,11 +175,7 @@ class Core:
                         self._empezar_a_hablar(id_enunciado), loop
                     ).result()
                 asyncio.run_coroutine_threadsafe(
-                    self.bus.send(
-                        "voice",
-                        {"type": "speak_chunk", "id": id_enunciado, "text": frase},
-                    ),
-                    loop,
+                    self._difundir_frase(id_enunciado, frase), loop
                 )
 
             try:
@@ -180,7 +204,43 @@ class Core:
                 await self.bus.send(
                     "voice", {"type": "speak", "id": id_enunciado, "text": answer}
                 )
+                # Por aquí pasan router, despedidas y errores: sin streaming no
+                # hubo ningún chat_chunk, y el chat se quedaría en blanco.
+                await self._a_chat({"type": "chat_chunk", "text": answer})
+            await self._a_chat({"type": "chat_end"})
             self._arm_unmute_guard(answer)
+
+    async def _difundir_frase(self, id_enunciado: int, frase: str) -> None:
+        await self.bus.send(
+            "voice", {"type": "speak_chunk", "id": id_enunciado, "text": frase}
+        )
+        await self._a_chat({"type": "chat_chunk", "text": frase})
+
+    async def _interrumpir(self) -> bool:
+        """Corta lo que `voice` esté diciendo y deja el sistema en `idle`.
+
+        Solo tiene sentido mientras se habla: pensando no hay nada que cortar.
+        """
+        if self._estado != "speaking":
+            return False
+
+        log.info("interrupción: corto el enunciado %s", self._enunciado)
+        await self.bus.send("voice", {"type": "stop"})
+        # El `speaking_done` del enunciado cortado llegará igualmente; al
+        # avanzar el contador deja de coincidir y no reactivará nada tarde.
+        self._enunciado += 1
+        if self._unmute_guard is not None:
+            self._unmute_guard.cancel()
+            self._unmute_guard = None
+        if self._apagar_al_terminar:
+            # Cortar la despedida es arrepentirse de ella: apagarse después
+            # sería apagarse a destiempo, al final del turno siguiente.
+            log.info("despedida interrumpida, cancelo el apagado")
+            self._apagar_al_terminar = False
+        await self.bus.send("ears", {"type": "mute", "on": False})
+        await self.set_state("idle")
+        await self._a_chat({"type": "chat_end"})
+        return True
 
     async def _empezar_a_hablar(self, id_enunciado: int) -> None:
         await self.set_state("speaking")
@@ -202,6 +262,8 @@ class Core:
         await self.bus.send(
             "voice", {"type": "speak", "id": self._enunciado, "text": respuesta}
         )
+        await self._a_chat({"type": "chat_chunk", "text": respuesta})
+        await self._a_chat({"type": "chat_end"})
         self._arm_unmute_guard(respuesta)
 
     def _apagar(self) -> None:
@@ -212,13 +274,21 @@ class Core:
         faena al parar la unidad.
         """
         log.info("apagando Multivac por orden de voz")
+        # Los modelos salen de la config: escritos aquí a mano, cambiar
+        # `llm.model` dejaría la VRAM ocupada, que es justo lo que se venía a
+        # liberar. Se citan porque esto acaba en /bin/sh -c.
+        llm = load().get("llm", {})
+        modelos = [
+            llm.get("model", "qwen3:8b"),
+            llm.get("embed_model", "nomic-embed-text"),
+        ]
+        parar = "".join(f"ollama stop {shlex.quote(str(m))}; " for m in modelos if m)
         subprocess.Popen(
             [
                 "systemd-run", "--user", "--collect", "--quiet",
                 "--unit=multivac-apagado",
                 "/bin/sh", "-c",
-                "ollama stop qwen3:8b; ollama stop nomic-embed-text; "
-                "systemctl --user stop multivac-core.service",
+                parar + "systemctl --user stop multivac-core.service",
             ],
             start_new_session=True,
         )

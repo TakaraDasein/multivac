@@ -9,6 +9,7 @@ inspeccionar en vivo con `socat - UNIX-CONNECT:~/.local/state/multivac/bus.sock`
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
@@ -44,6 +45,11 @@ class BusServer:
         path.unlink(missing_ok=True)
         self._server = await asyncio.start_unix_server(self._on_client, path=str(path))
         path.chmod(0o600)
+        # Al apagarse, el fichero sobrevive al proceso y los clientes que
+        # comprueban si existe antes de conectar (el plugin de la barra) se
+        # llevan un "connection refused" en vez de ver que no hay nadie. Se
+        # borra en cuanto el proceso termina, sea por señal o por excepción.
+        atexit.register(lambda: path.unlink(missing_ok=True))
         log.info("bus escuchando en %s", path)
 
     async def _on_client(
@@ -84,10 +90,11 @@ class BusServer:
     async def broadcast(self, msg: Message, prefix: str | None = None) -> None:
         """Difunde a todos, o solo a los roles que empiecen por `prefix`.
 
-        El prefijo existe para los clientes que pueden estar repetidos: waybar
-        levanta un módulo por monitor, y como el hub guarda una conexión por
-        rol, con un nombre fijo el segundo dejaría mudo al primero. Cada uno se
-        anuncia como `bar-<pid>` y aquí se les habla a todos.
+        El prefijo separa a los clientes por familia sin que el hub tenga que
+        saber cuántos hay: como guarda una conexión por rol, un nombre fijo
+        dejaría mudo al segundo que se conectara. Así el plugin de Quickshell
+        abre `bar-shell` para los niveles y `chat-shell` para la conversación,
+        y `python -m multivac.bar` puede escuchar a la vez como `bar-<pid>`.
         """
         for role in list(self._clients):
             if prefix is None or role.startswith(prefix):

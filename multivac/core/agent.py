@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 import unicodedata
 from typing import Any, Callable
 
@@ -69,6 +70,21 @@ no puedes hacer, dilo claramente sin inventar.
 """
 
 
+# Una confirmación pendiente caduca: si el usuario no contesta y sigue a otra
+# cosa, su frase siguiente no puede leerse como un sí o un no a algo que ya
+# olvidó haber preguntado.
+CONFIRM_TTL = 60.0
+
+AFIRMATIVAS = {
+    "si", "claro", "confirmo", "confirmado", "adelante", "hazlo", "vale",
+    "dale", "venga", "supuesto", "correcto", "eso",
+}
+NEGATIVAS = {
+    "no", "nada", "cancela", "cancelalo", "olvidalo", "dejalo", "anulalo",
+    "para", "negativo",
+}
+
+
 class Agent:
     def __init__(self) -> None:
         cfg = load()
@@ -81,7 +97,8 @@ class Agent:
         )
         self.client = ollama.Client(host=self.cfg["host"])
         self.memory = Memory(self.client, self.cfg["embed_model"])
-        self._pending_confirm: tuple[str, dict[str, Any]] | None = None
+        # (herramienta, argumentos, momento en que se preguntó)
+        self._pending_confirm: tuple[str, dict[str, Any], float] | None = None
 
     def _build_messages(self, user_text: str) -> list[dict[str, Any]]:
         recent = self.memory.recent(self.mem_cfg["recent_turns"])
@@ -122,7 +139,11 @@ class Agent:
         completo, que es lo que se guarda en memoria y lo que ve multivacctl.
         """
         if self._pending_confirm is not None:
-            return self._resolve_confirmation(user_text)
+            if time.monotonic() - self._pending_confirm[2] > CONFIRM_TTL:
+                log.info("confirmación de %s caducada", self._pending_confirm[0])
+                self._pending_confirm = None
+            elif (zanjado := self._resolve_confirmation(user_text)) is not None:
+                return zanjado
 
         self.memory.add("user", user_text)
 
@@ -150,7 +171,7 @@ class Agent:
 
                 tool_obj = tools.REGISTRY.get(name)
                 if tool_obj is not None and tool_obj.confirm:
-                    self._pending_confirm = (name, args)
+                    self._pending_confirm = (name, args, time.monotonic())
                     pregunta = f"Voy a ejecutar {name.replace('_', ' ')}. ¿Me lo confirma?"
                     self.memory.add("assistant", pregunta)
                     return pregunta
@@ -227,19 +248,39 @@ class Agent:
             message["tool_calls"] = tool_calls
         return message, " ".join(dichas)
 
-    def _resolve_confirmation(self, user_text: str) -> str:
-        name, args = self._pending_confirm  # type: ignore[misc]
+    def _resolve_confirmation(self, user_text: str) -> str | None:
+        """Interpreta la respuesta a una confirmación pendiente.
+
+        Devuelve None si la frase no es ni un sí ni un no: entonces no es una
+        respuesta, es otra petición, y darla por negativa dejaría al usuario
+        sin lo que acaba de pedir.
+        """
+        name, args, _ = self._pending_confirm  # type: ignore[misc]
+        palabras = set(_sin_tildes(user_text).split())
+        afirmativo = bool(palabras & AFIRMATIVAS)
+        negativo = bool(palabras & NEGATIVAS)
+        if afirmativo == negativo:
+            # Ni una cosa ni la otra (o las dos): la pregunta se queda sin
+            # contestar y la frase sigue su camino como petición nueva.
+            self._pending_confirm = None
+            log.info("respuesta ambigua a la confirmación de %s", name)
+            return None
+
         self._pending_confirm = None
-        afirmativo = any(
-            palabra in user_text.lower()
-            for palabra in ("sí", "si", "confirmo", "adelante", "hazlo", "vale", "dale")
-        )
-        if not afirmativo:
-            respuesta = "Como usted diga, no hago nada."
-        else:
-            respuesta = tools.call(name, args)
+        respuesta = tools.call(name, args) if afirmativo else "Como usted diga, no hago nada."
         self.memory.add("assistant", respuesta)
         return respuesta
+
+
+def _sin_tildes(texto: str) -> str:
+    """Minúsculas sin tildes ni signos, para comparar contra palabra suelta."""
+    descompuesto = unicodedata.normalize("NFD", texto.lower())
+    letras = "".join(
+        c if unicodedata.category(c)[0] in "LN" else " "
+        for c in descompuesto
+        if unicodedata.category(c) != "Mn"
+    )
+    return letras
 
 
 def _contexto_temporal() -> str:

@@ -34,15 +34,15 @@ async def _send(text: str, esperar: bool) -> int:
     return 1
 
 
-async def _listen_now() -> int:
-    """Push-to-talk: fuerza una escucha sin esperar la palabra de activación."""
+async def _enviar_suelto(msg: dict) -> int:
+    """Manda una orden que no espera respuesta (`listen`, `stop`)."""
     bus = BusClient("ctl")
     try:
         await bus.connect(retries=2, delay=0.5)
     except ConnectionError:
         print("multivac-core no está corriendo.", file=sys.stderr)
         return 1
-    await bus.send({"type": "listen"})
+    await bus.send(msg)
     return 0
 
 
@@ -58,6 +58,7 @@ def main() -> int:
 
     sub.add_parser("estado", help="muestra el estado actual")
     sub.add_parser("escucha", help="fuerza una escucha (push-to-talk)")
+    sub.add_parser("calla", help="interrumpe lo que esté diciendo ahora mismo")
 
     args = parser.parse_args()
 
@@ -66,7 +67,9 @@ def main() -> int:
         print(archivo.read_text().strip() if archivo.exists() else "parado")
         return 0
     if args.cmd == "escucha":
-        return asyncio.run(_listen_now())
+        return asyncio.run(_enviar_suelto({"type": "listen"}))
+    if args.cmd == "calla":
+        return asyncio.run(_enviar_suelto({"type": "stop"}))
     return asyncio.run(_send(" ".join(args.texto), not args.sin_esperar))
 
 

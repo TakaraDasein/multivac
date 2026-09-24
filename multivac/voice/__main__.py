@@ -49,6 +49,10 @@ class Reproductor:
 
     def cortar(self) -> None:
         self.speaker.stop()
+        # Además del corte del audio hace falta cerrar el enunciado: si el
+        # `stop` llega mientras `say_stream` espera la frase siguiente, está
+        # bloqueado en la cola y `speaker.stop()` solo no lo despierta.
+        self._cola.put(("fin", None))
 
     def _frases_de(self, id_enunciado: int):
         """Va sacando frases de la cola hasta el final del enunciado."""
