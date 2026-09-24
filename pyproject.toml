@@ -19,6 +19,11 @@ dependencies = [
     "nvidia-cudnn-cu12>=9.24.0.43",
 ]
 
+[project.optional-dependencies]
+# Solo para desarrollo: `uv sync --extra dev`, o
+# `uv pip install pytest`. Las pruebas no tocan GPU, micrófono ni Ollama.
+dev = ["pytest>=8.0"]
+
 [project.scripts]
 multivacctl = "multivac.ctl:main"
 
@@ -28,3 +33,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["multivac"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
