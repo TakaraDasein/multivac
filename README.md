@@ -110,15 +110,29 @@ sola conexión** al bus para todo el shell y de ahí cuelgan sus tres piezas:
 | Pieza | Fichero | Qué es |
 |---|---|---|
 | Servicio | `MultivacBus.qml` | singleton: la conexión al bus, con reconexión |
-| Widget | `BarWidget.qml` | icono del estado + onda de la voz; clic para hablar |
+| Widget | `BarWidget.qml` | la figura, la onda, y el panel que abre el clic |
 | Overlay | `Chat.qml` | la conversación en pantalla |
+| Marca | `Mark.qml`, `icons/multivac.svg` | su figura, coloreada con el tema |
+| Onda | `WaveStrip.qml` | las columnas; se dibuja en la barra y en el panel |
+
+El icono es un dibujo propio y no un glifo de fuente, para que sea la misma
+figura en la barra y en el panel sin depender de qué Nerd Font haya instalada.
+Está trazado para los diecinueve píxeles a los que vive en la barra: un solo
+contorno con el rostro calado, sin trazos finos que desaparezcan al reducir.
+
+**Clic izquierdo abre el panel**, con el estado, la onda ancha, un interruptor
+de encendido, los botones de escribir/escuchar/callar, y qué modelos ocupan la
+GPU en ese momento —el dato que decide si responde en dos segundos o en ocho—.
+Clic derecho la apaga directamente. Si prefieres el comportamiento antiguo (que
+el clic hable en vez de abrir el panel), pon el ajuste `click_action` en
+`listen`.
 
 Instalarlo es dejarlo (o enlazarlo) en el directorio de plugins del shell y
 añadir el widget a la barra:
 
 ```bash
 ln -s ~/ruta/al/plugin/efren-cyborg.multivac \
-      ~/.config/omarchy/shell/plugins/efren-cyborg.multivac
+      ~/.config/omarchy/plugins/efren-cyborg.multivac
 omarchy restart shell
 ```
 
@@ -133,6 +147,8 @@ propio menú:
 | `wave_color` | `accent` | `accent`, `foreground`, o un color literal `#26FFDF` |
 | `bar_width` | 3 | ancho de una columna, en píxeles |
 | `wave_height` | 14 | alto de una columna a plena escala, en píxeles |
+| `icon_size` | 18 | alto de la figura, en píxeles, antes del escalado de la barra |
+| `click_action` | `panel` | `panel` abre el menú; `listen` va directo a hablarle |
 
 La ganancia por defecto no es arbitraria: el RMS real de la voz de Piper se mueve
 entre 0,19 y 0,37, y 2,6 lleva ese rango a la altura completa sin que la onda se
@@ -235,27 +251,49 @@ que añadir el binario a `exec_allowlist` (ver abajo), o no se lanzará.
 
 ## Qué puede hacer, y qué no
 
-Limitado a propósito a **abrir aplicaciones, buscar en la web y consultar el
-estado del equipo**. No borra archivos, no instala programas, no apaga el equipo
-ni toca la configuración.
+Limitado a propósito a **abrir aplicaciones, buscar en la web, consultar el
+estado del equipo, cambiar el tema del escritorio y leer lo que hay en
+pantalla**. No borra archivos, no instala programas, no apaga el equipo ni toca
+el resto de la configuración.
 
 Eso no depende de que el modelo se porte bien. No existen herramientas para ello,
 y hay dos barreras:
 
 ```toml
 [shell]
-allowlist      = ["hyprctl", "notify-send"]  # binarios invocables
-exec_allowlist = ["gtk-launch", "brave"]     # lo único que puede llegar a arrancar
+allowlist        = ["hyprctl", "notify-send", "omarchy", "grim", "slurp", "tesseract"]
+exec_allowlist   = ["gtk-launch", "brave"]   # lo único que puede llegar a arrancar
+omarchy_comandos = ["theme list", "theme current", "theme set", "system lock", "menu"]
 ```
 
-La segunda es la que importa: `hyprctl dispatch exec <cualquier cosa>` equivale a
-una shell, así que permitir `hyprctl` a secas dejaría la puerta abierta de par en
-par. Todo lanzamiento pasa por `registry.launch()`, que cita cada argumento con
+`exec_allowlist` es la que importa: `hyprctl dispatch exec <cualquier cosa>`
+equivale a una shell, así que permitir `hyprctl` a secas dejaría la puerta
+abierta de par en par.
+
+`omarchy` es el centro de mando del sistema —incluye `update`, `system
+shutdown`, `factory reset`, `theme remove`, `pkg`— y se acota igual, en tres
+capas: solo los comandos enumerados arriba; el número de argumentos de cada uno
+fijado **en el código** (`_OMARCHY_ARGS`), de modo que añadir un comando a la
+lista no le concede argumentos libres; y ningún argumento puede empezar por
+guion, para cerrar las opciones encubiertas del CLI. Si la clave falta en la
+config no se permite nada: el fallo cierra, no abre. Todo lanzamiento pasa por `registry.launch()`, que cita cada argumento con
 `shlex`: una URL con `&` llega intacta al navegador, y un `; rm -rf ~` viaja como
 texto literal, no como comando.
 
 Probado contra `rm` directo, `rm` vía hyprctl, `sh -c`, `systemctl poweroff`,
-`killactive` e inyección en URL y en nombre de aplicación.
+`killactive`, inyección en URL y en nombre de aplicación, y —para `omarchy`—
+los trece subcomandos destructivos, los prefijos incompletos (`omarchy theme`),
+`theme set` sin argumento y con dos, `--help`, `sudo omarchy …`, y los binarios
+sueltos de `/usr/share/omarchy/bin/`, que no están en la allowlist: solo lo
+está el despachador `omarchy`.
+
+**Visión por OCR, no por modelo.** `leer_pantalla` captura con `grim` (una
+región elegida con `slurp`, o la pantalla entera), pasa `tesseract` y devuelve
+el texto para que el modelo lo use: «¿qué dice este error?», «resume esto». Es
+la única vía que cabe aquí — con 8 GB de VRAM, el modelo de lenguaje más los
+embeddings y Whisper ya rondan los 6, y no entra además uno de visión. Sin
+`tesseract-data-spa` instalado funciona en inglés y pierde acentos y eñes; la
+herramienta lo detecta y lo dice.
 
 Para devolverle el control de volumen, brillo y música, añade `media` a la línea
 de importación de `tools/__init__.py`.
@@ -308,6 +346,25 @@ permiten varias instancias: el hub difunde por prefijo. Roles reservados: `core`
 Un cliente **nunca** debe morir porque `core` no esté: si el socket no existe, lo
 correcto es quedarse en `connected = false` y `state = "off"`, y reintentar con
 backoff. Así lo hacen `MultivacBus.qml` en el shell y `multivac/bar.py` aquí.
+
+Al saludar, el hub responde con el `state` actual. Sin eso, un cliente que se
+conecta con Multivac ya en reposo —el caso normal del widget, que arranca con el
+shell y no con el core— esperaría un cambio que no llega y se pintaría apagado.
+
+### Manejarlo sin ratón
+
+El plugin del shell publica una entrada IPC, útil para atajos de teclado:
+
+```bash
+qs -p /usr/share/omarchy/shell ipc call multivac menu    # abre/cierra el panel
+qs -p /usr/share/omarchy/shell ipc call multivac listen  # escucha ahora
+qs -p /usr/share/omarchy/shell ipc call multivac stop    # cállate
+qs -p /usr/share/omarchy/shell ipc call multivac state   # en qué anda
+qs -p /usr/share/omarchy/shell ipc call multivac say "qué hora es"
+```
+
+El `-p` hace falta porque Omarchy arranca el shell con esa ruta de configuración;
+sin él, `qs` no encuentra la instancia.
 
 ### Verlo en vivo
 
@@ -406,6 +463,30 @@ puede depender de un servicio del *sistema*.
   pero "quiero que busques gatos" pasa por el LLM (2 s en vez de 0,1 s).
 - **El modelo a veces llama a una herramienta cuando no toca**, o se salta la que
   debería. Es el 2/13 que falla en el banco de pruebas.
+- **El OCR va en inglés** mientras no esté `tesseract-data-spa`: lee, pero pierde
+  acentos y eñes. `_idioma()` lo detecta solo en cuanto se instala.
+- **`media.py` existe y no se importa.** Volumen, brillo y reproducción están
+  escritos pero desactivados (ver el docstring de `core/tools/__init__.py`).
+  Activarlos pide añadir `wpctl`, `playerctl` y `brightnessctl` a la allowlist,
+  y acotar los sufijos que acepta `wpctl set-volume` igual que se acota
+  `theme set`. `brightnessctl` escribe en sysfs y es el único que toca estado
+  del hardware: conviene decidirlo aparte.
+
+## Qué falta por probar
+
+Honestidad sobre la cobertura real, que no es la misma que la de los tests:
+
+- **El corte del audio a media frase.** El mensaje `stop` llega al bus y el
+  reproductor lo atiende, pero la interrupción nunca se ha ejercitado con sonido
+  real: ni que la voz calle de verdad, ni que el micro se reabra después.
+- **El panel del widget, abierto con el ratón.** `PopupCard` usa
+  `HyprlandFocusGrab`, que descarta el popup si no lo abre un clic de verdad, así
+  que no se ha podido verificar de forma automática. Todo lo que lo alimenta
+  —estado, onda, conexión— sí está comprobado en vivo.
+- **`bloquear_pantalla`**, por motivos obvios. Es la única herramienta con
+  `confirm=True`, y por tanto la única que ejercita la confirmación hablada.
+- **La barra vertical.** El widget está escrito para funcionar de lado, pero solo
+  se ha visto en horizontal.
 
 ## Estructura
 
@@ -424,6 +505,12 @@ multivac/
 │   ├── router.py       "abre X" / "busca Y" sin LLM
 │   ├── memory.py       SQLite + sqlite-vec
 │   └── tools/          herramientas expuestas al modelo
+│       ├── desktop.py  abrir apps, ventanas, notificaciones
+│       ├── web.py      buscar y abrir páginas en el navegador
+│       ├── system.py   hora, batería, recursos
+│       ├── omarchy.py  temas del escritorio, bloqueo, menú
+│       ├── vision.py   leer la pantalla por OCR
+│       └── media.py    volumen y reproducción (escrito, NO importado)
 └── voice/tts.py        Piper, sintetizando frase a frase
 
 tests/                  pruebas sin GPU ni micrófono (pytest)
@@ -432,4 +519,19 @@ systemd/                las tres unidades, sin rutas escritas dentro
 ```
 
 La barra vive **fuera** de este repositorio, en el plugin
-`efren-cyborg.multivac` del shell de Omarchy, y habla con `core` solo por el bus.
+`efren-cyborg.multivac` del shell de Omarchy, y habla con `core` solo por el bus:
+
+```
+efren-cyborg.multivac/
+├── manifest.json       kinds: service, bar-widget, overlay
+├── MultivacBus.qml     la conexión al bus + la entrada IPC
+├── BarWidget.qml       la figura, la onda y el panel
+├── Chat.qml            la conversación
+├── Mark.qml            la figura, coloreada con el tema
+├── WaveStrip.qml       las columnas de la onda
+└── icons/multivac.svg  el dibujo
+```
+
+Esa separación es deliberada: el core no sabe qué barra hay al otro lado. Cuando
+Omarchy 4 cambió waybar por Quickshell, migrar fue sustituir un cliente del bus,
+no tocar el sistema.

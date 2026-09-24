@@ -37,7 +37,9 @@ command -v uv >/dev/null || {
 info "Creando el entorno (Python 3.11)"
 cd "$RAIZ"
 uv venv --python 3.11
-uv sync
+# Con --extra dev entra pytest. Sin él, un `uv sync` posterior lo DESINSTALA y
+# deja las pruebas sin poder ejecutarse.
+uv sync --extra dev
 
 # --- Modelos ----------------------------------------------------------------
 info "Descargando el modelo de wake word"
