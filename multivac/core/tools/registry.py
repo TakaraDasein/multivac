@@ -176,6 +176,56 @@ def _check_hyprctl(argv: list[str]) -> None:
         raise NotAllowed(f"{binario} no se puede lanzar")
 
 
+# Cuántos argumentos libres admite cada comando de Omarchy permitido, como
+# (mínimo, máximo). Lo decide el código, no el config: si mañana alguien añade
+# un comando a la lista del config.toml, sin entrada aquí se queda en cero
+# argumentos y no puede colar nada detrás. Es el equivalente a acotar el `exec`
+# de hyprctl.
+_OMARCHY_ARGS: dict[str, tuple[int, int]] = {
+    "theme list": (0, 0),
+    "theme current": (0, 0),
+    "theme set": (1, 1),  # el nombre del tema, y nada más
+    "system lock": (0, 0),
+    "menu": (0, 0),
+}
+
+
+def _check_omarchy(argv: list[str]) -> None:
+    """Acota `omarchy` a un puñado de subcomandos reversibles.
+
+    `omarchy` es un centro de mando completo: `omarchy update`, `system
+    shutdown`, `system factory reset`, `theme remove`, `pkg`, `install`,
+    `migrate` o `dev` instalan, borran, apagan o reconfiguran el equipo.
+    Permitir el binario a secas rompería la promesa del proyecto, así que se
+    admite solo lo que está en `omarchy_comandos` y ni un argumento de más.
+    """
+    from ...config import load
+
+    # Sin lista en el config no se permite nada: el fallo cierra, no abre.
+    permitidos = set(load()["shell"].get("omarchy_comandos", []))
+    if len(argv) < 2:
+        raise NotAllowed("omarchy necesita un subcomando")
+
+    # Se busca la coincidencia más larga: "theme set" antes que "theme".
+    comando = None
+    for largo in (3, 2, 1):
+        candidato = " ".join(argv[1 : 1 + largo])
+        if candidato in permitidos:
+            comando = candidato
+            resto = argv[1 + largo :]
+            break
+    if comando is None:
+        raise NotAllowed(f"omarchy {' '.join(argv[1:])} no está permitido")
+
+    minimo, maximo = _OMARCHY_ARGS.get(comando, (0, 0))
+    if not minimo <= len(resto) <= maximo:
+        raise NotAllowed(f"omarchy {comando} no admite esos argumentos")
+    # Un argumento con guion inicial sería una opción encubierta del CLI.
+    for arg in resto:
+        if arg.startswith("-"):
+            raise NotAllowed(f"opción no permitida: {arg}")
+
+
 def run(argv: list[str], timeout: float = 10.0) -> str:
     """Ejecuta un comando externo sin pasar por una shell.
 
@@ -191,6 +241,8 @@ def run(argv: list[str], timeout: float = 10.0) -> str:
         raise NotAllowed(f"{argv[0]} no está en la allowlist")
     if argv[0] == "hyprctl":
         _check_hyprctl(argv)
+    if argv[0] == "omarchy":
+        _check_omarchy(argv)
 
     proc = subprocess.run(
         argv, capture_output=True, text=True, timeout=timeout, shell=False

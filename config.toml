@@ -60,8 +60,19 @@ recall_k = 3
 # herramienta que borre, instale, apague o modifique la configuración, y estas
 # listas son la segunda barrera por si el modelo intentara algo raro.
 #
-# Binarios que puede invocar directamente.
-allowlist = ["hyprctl", "notify-send"]
+# Binarios que puede invocar directamente. `grim`, `slurp` y `tesseract` solo
+# capturan y leen la pantalla: no escriben nada fuera del directorio temporal
+# que crea la herramienta y que se borra siempre.
+allowlist = ["hyprctl", "notify-send", "omarchy", "grim", "slurp", "tesseract"]
+
+# `omarchy` es el centro de mando de Omarchy: incluye `update`, `system
+# shutdown`, `system factory reset`, `theme remove`, `install`, `pkg`, `migrate`
+# y `dev`. Permitir el binario a secas sería tan malo como no tener allowlist,
+# así que aquí se enumeran los ÚNICOS comandos admitidos, todos reversibles y
+# sin efectos sobre paquetes, ficheros ni el estado de la máquina. El número de
+# argumentos que admite cada uno lo fija el código (`_OMARCHY_ARGS`), no
+# esta lista: añadir aquí un comando no le concede argumentos libres.
+omarchy_comandos = ["theme list", "theme current", "theme set", "system lock", "menu"]
 
 # `hyprctl dispatch exec` puede lanzar cualquier programa, así que se acota qué
 # dispatchers se admiten...
