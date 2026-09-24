@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Botón de waybar (y del atajo de teclado):
+# Botón del widget de la barra (y del atajo de teclado):
 #   - apagado  → lo enciende
 #   - encendido→ dispara una escucha (push-to-talk)
 # Con el argumento "off" siempre apaga.

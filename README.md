@@ -57,7 +57,8 @@ las demás.
 | Memoria | SQLite + sqlite-vec + `nomic-embed-text` | `multivac/core/memory.py` |
 | Voz | Piper `es_AR-daniela-high` (CPU) | `multivac/voice/tts.py` |
 | Troceado en frases | `SentenceBuffer`, compartido | `multivac/text.py` |
-| Barra de estado | módulo de waybar con la onda de la voz | `multivac/bar.py` |
+| Barra de estado | plugin de Quickshell (fuera del repo) | `efren-cyborg.multivac` |
+| Depurar el bus | volcado de las líneas JSON en crudo | `multivac/bar.py` |
 
 ### Rendimiento real
 
@@ -93,41 +94,52 @@ El script crea el entorno, descarga los modelos (~5,5 GB) y deja instalados los
 comandos y los servicios. Necesitas antes: `ollama`, `hyprland`, `brave`,
 `pipewire`, `libnotify`, y los drivers de NVIDIA.
 
-Luego, para el botón de la barra y el atajo de teclado:
+El script también deja la ruta del clon en `~/.config/multivac/entorno`
+(`MULTIVAC_RAIZ`): las unidades de systemd la leen de ahí, así que el repositorio
+puede estar donde quieras. Si lo mueves, vuelve a ejecutar `setup.sh`.
+
+Luego, para el widget de la barra y el atajo de teclado:
 
 <details>
-<summary>Módulo de waybar (<code>~/.config/waybar/config.jsonc</code>)</summary>
+<summary>Widget de la barra (Omarchy 4 + Quickshell)</summary>
 
-```jsonc
-"custom/multivac": {
-  // Sin "interval": el script emite en continuo (icono + onda de la voz).
-  "exec": "multivac-waybar",
-  "return-type": "json",
-  "format": "{}",
-  "tooltip": true,
-  "on-click": "multivac-toggle",
-  "on-click-right": "multivac-toggle off"
-}
+Ya no hay módulo de waybar: la barra de Omarchy 4 es **Quickshell**, y Multivac se
+integra como un plugin del shell, `efren-cyborg.multivac`. El plugin abre **una
+sola conexión** al bus para todo el shell y de ahí cuelgan sus tres piezas:
+
+| Pieza | Fichero | Qué es |
+|---|---|---|
+| Servicio | `MultivacBus.qml` | singleton: la conexión al bus, con reconexión |
+| Widget | `BarWidget.qml` | icono del estado + onda de la voz; clic para hablar |
+| Overlay | `Chat.qml` | la conversación en pantalla |
+
+Instalarlo es dejarlo (o enlazarlo) en el directorio de plugins del shell y
+añadir el widget a la barra:
+
+```bash
+ln -s ~/ruta/al/plugin/efren-cyborg.multivac \
+      ~/.config/omarchy/shell/plugins/efren-cyborg.multivac
+omarchy restart shell
 ```
-Añade `"custom/multivac"` a `modules-left`, y reinicia con `omarchy restart waybar`.
 
-El módulo pinta el icono del estado y, cuando Multivac habla, la onda de su voz
-en bloques Unicode (necesita una Nerd Font). Para que sea una píldora que se
-abre al hablar, en `style.css`:
+Después, `omarchy menu` → **Bar** → añadir **Multivac** (aparece en la categoría
+*System*, y por defecto se coloca a la derecha). Ajustes del widget, desde el
+propio menú:
 
-```css
-#custom-multivac {
-  border-radius: 999px;
-  background: transparent;
-  transition: background-color 200ms ease, padding 200ms ease;
-}
-#custom-multivac.listening,
-#custom-multivac.thinking,
-#custom-multivac.speaking {
-  padding: 0 10px;
-  background-color: rgba(255, 255, 255, 0.07);
-}
-```
+| Ajuste | Por defecto | Qué hace |
+|---|---|---|
+| `columns` | 9 | columnas de la onda; más columnas, más historia en pantalla |
+| `gain` | 2.6 | multiplica el `level` del bus antes de recortar a 1.0 |
+| `wave_color` | `accent` | `accent`, `foreground`, o un color literal `#26FFDF` |
+| `bar_width` | 3 | ancho de una columna, en píxeles |
+| `wave_height` | 14 | alto de una columna a plena escala, en píxeles |
+
+La ganancia por defecto no es arbitraria: el RMS real de la voz de Piper se mueve
+entre 0,19 y 0,37, y 2,6 lleva ese rango a la altura completa sin que la onda se
+aplaste contra el techo.
+
+Sin barra tampoco te quedas a ciegas: `python -m multivac.bar --sin-level` vuelca
+por pantalla lo que el bus está publicando.
 </details>
 
 <details>
@@ -145,12 +157,13 @@ Comprueba antes que la tecla esté libre: `omarchy menu keybindings --print`.
 
 | Acción | Cómo |
 |---|---|
-| Encender | Clic en el icono de waybar, o **SUPER+M** (~3 s) |
-| Hablarle | **"Hey Jarvis"**, o **SUPER+M**, o clic en el icono |
+| Encender | Clic en el widget de la barra, o **SUPER+M** (~3 s) |
+| Hablarle | **"Hey Jarvis"**, o **SUPER+M**, o clic en el widget |
 | Por texto | `multivacctl di "qué hora es"` |
-| Apagar | Di **"vete"**, o clic derecho en el icono |
+| Apagar | Di **"vete"**, o clic derecho en el widget |
 | Ver estado | `multivacctl estado` |
 | Logs | `journalctl --user -u multivac-core -f` |
+| Ver el bus | `python -m multivac.bar --sin-level` |
 
 **No arranca con la sesión** a propósito: se enciende cuando lo necesitas. Al
 apagarlo suelta los modelos y libera ~5,9 GB de VRAM, que es justo lo que hace
@@ -249,6 +262,79 @@ de importación de `tools/__init__.py`.
 
 ---
 
+## El bus (interfaz pública)
+
+El bus dejó de ser un detalle interno el día que la barra se fue a otro
+repositorio: hoy hay clientes QML que dependen de este protocolo, así que
+**cambiarlo rompe cosas fuera de aquí**.
+
+- **Socket:** `$XDG_STATE_HOME/multivac/bus.sock` (por defecto
+  `~/.local/state/multivac/bus.sock`), modo `0600`.
+- **Protocolo:** JSON-líneas — un objeto JSON por línea, terminada en `\n`, UTF-8.
+- **Servidor:** `multivac-core`. Todo lo demás es cliente.
+
+### Handshake
+
+El primer mensaje del cliente, siempre:
+
+```json
+{"type": "hello", "role": "bar-1234"}
+```
+
+El hub guarda **una conexión por rol**, así que dos clientes con el mismo nombre
+se dejan mudos el uno al otro. Los roles con sufijo (`bar-<pid>`, `chat-<pid>`)
+permiten varias instancias: el hub difunde por prefijo. Roles reservados: `core`,
+`ears`, `voice`, `ctl`, `bar-*`, `chat-*`.
+
+### De `core` a los clientes
+
+| `type` | Campos | A quién | Qué significa |
+|---|---|---|---|
+| `state` | `state` | a todos | `off` \| `starting` \| `idle` \| `listening` \| `thinking` \| `speaking` |
+| `level` | `v` (0.0–1.0) | prefijo `bar-` | volumen instantáneo de la voz, ~21 Hz |
+| `answer` | `text` | al que preguntó | la respuesta completa |
+| `chat_user` | `text` | prefijo `chat-` | lo que dijo el usuario (transcrito o escrito) |
+| `chat_chunk` | `text` | prefijo `chat-` | una frase de la respuesta, según se genera |
+| `chat_end` | — | prefijo `chat-` | fin del turno |
+
+### De los clientes a `core`
+
+| `type` | Campos | Qué hace |
+|---|---|---|
+| `utterance` | `text` | una frase, como si se hubiera dicho en voz alta |
+| `listen` | — | push-to-talk: fuerza una escucha |
+| `stop` | — | interrumpe lo que esté diciendo ahora mismo |
+
+Un cliente **nunca** debe morir porque `core` no esté: si el socket no existe, lo
+correcto es quedarse en `connected = false` y `state = "off"`, y reintentar con
+backoff. Así lo hacen `MultivacBus.qml` en el shell y `multivac/bar.py` aquí.
+
+### Verlo en vivo
+
+```bash
+python -m multivac.bar               # todo, incluida la onda
+python -m multivac.bar --sin-level   # sin los ~21 mensajes/s de `level`
+socat - UNIX-CONNECT:$HOME/.local/state/multivac/bus.sock   # a pelo
+```
+
+---
+
+## Desarrollo
+
+```bash
+uv sync --extra dev
+.venv/bin/python -m pytest
+```
+
+Las pruebas cubren lo que se puede probar sin GPU, micrófono ni Ollama: el
+troceado en frases (`text.py`), el router de intención, el filtro de la memoria y
+—lo que más importa— la **allowlist**: que `run()` rechace un binario que no esté
+en la lista y que `hyprctl dispatch exec` no pueda lanzar nada fuera de
+`exec_allowlist`. El router se prueba con los lanzadores sustituidos: ninguna
+prueba abre una ventana.
+
+---
+
 ## Por qué estas decisiones
 
 **Por qué un modelo de 8B.** Medido con `scripts/comparar_modelos.py`, que
@@ -326,6 +412,7 @@ puede depender de un servicio del *sistema*.
 ```
 multivac/
 ├── bus.py              socket Unix, protocolo JSON-líneas
+├── bar.py              cliente de depuración: vuelca el bus por stdout
 ├── config.py           carga de config.toml
 ├── ctl.py              CLI multivacctl
 ├── ears/               micrófono → texto
@@ -338,4 +425,11 @@ multivac/
 │   ├── memory.py       SQLite + sqlite-vec
 │   └── tools/          herramientas expuestas al modelo
 └── voice/tts.py        Piper, sintetizando frase a frase
+
+tests/                  pruebas sin GPU ni micrófono (pytest)
+scripts/setup.sh        instalación completa, idempotente
+systemd/                las tres unidades, sin rutas escritas dentro
 ```
+
+La barra vive **fuera** de este repositorio, en el plugin
+`efren-cyborg.multivac` del shell de Omarchy, y habla con `core` solo por el bus.

@@ -7,6 +7,8 @@ RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VOCES="$HOME/.local/share/piper-voices"
 BIN="$HOME/.local/bin"
 UNIDADES="$HOME/.config/systemd/user"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/multivac"
+PLUGINS="$HOME/.config/omarchy/plugins"
 
 info() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 aviso() { printf '\033[1;33m !\033[0m %s\n' "$*"; }
@@ -60,33 +62,48 @@ done
 info "Instalando comandos en $BIN"
 mkdir -p "$BIN"
 ln -sf "$RAIZ/.venv/bin/multivacctl" "$BIN/multivacctl"
-ln -sf "$RAIZ/scripts/multivac-waybar" "$BIN/multivac-waybar"
 ln -sf "$RAIZ/scripts/multivac-toggle" "$BIN/multivac-toggle"
-chmod +x "$RAIZ/scripts/multivac-waybar" "$RAIZ/scripts/multivac-toggle"
+chmod +x "$RAIZ/scripts/multivac-toggle"
 
 info "Instalando los servicios de usuario"
-mkdir -p "$UNIDADES"
-# Las unidades traen la ruta del proyecto escrita; se ajusta si está en otro
-# sitio que el original.
-for unidad in "$RAIZ"/systemd/multivac-*.service; do
-  sed "s|%h/1.Cyborg-Town/2.Daten-Town/Multivac/multivac|${RAIZ/#$HOME/%h}|g" \
-    "$unidad" > "$UNIDADES/$(basename "$unidad")"
-done
+mkdir -p "$UNIDADES" "$CONFIG"
+# Las unidades no llevan ninguna ruta escrita: la leen de aquí. Mover el
+# repositorio es volver a ejecutar este script (o editar esta línea).
+cat > "$CONFIG/entorno" <<ENTORNO
+# Generado por scripts/setup.sh. Ruta del clon de Multivac; de aquí la sacan
+# las tres unidades de systemd.
+MULTIVAC_RAIZ=$RAIZ
+ENTORNO
+cp "$RAIZ"/systemd/multivac-*.service "$UNIDADES/"
 systemctl --user daemon-reload
+
+# --- Plugin de la barra (Quickshell) ---------------------------------------
+if [[ -d "$PLUGINS" ]]; then
+  info "Barra: plugin de Quickshell"
+  if [[ -e "$PLUGINS/efren-cyborg.multivac" ]]; then
+    echo "  Ya instalado en $PLUGINS/efren-cyborg.multivac"
+  else
+    aviso "Falta el plugin efren-cyborg.multivac en $PLUGINS"
+    aviso "Copia o enlaza ahí el directorio del plugin y reinicia el shell."
+  fi
+else
+  aviso "No encuentro $PLUGINS: ¿Omarchy 4 con Quickshell?"
+fi
 
 cat <<'FIN'
 
 ==> Listo.
 
-  Encender:   multivac-toggle on     (o el icono de waybar, o SUPER+M)
+  Encender:   multivac-toggle on     (o el widget de la barra, o SUPER+M)
   Probar:     multivacctl di "qué hora es"
   Apagar:     di "vete", o multivac-toggle off
   Logs:       journalctl --user -u multivac-core -f
+  Ver el bus: .venv/bin/python -m multivac.bar --sin-level
 
 Queda a mano, si lo quieres:
   - Atajo en ~/.config/hypr/bindings.conf:
       bindd = SUPER, M, Multivac escucha, exec, multivac-toggle
-  - Módulo de waybar: ver el bloque "custom/multivac" del README.
+  - Widget en la barra: omarchy menu → Bar → añadir "Multivac" (ver README).
   - Arranque automático con la sesión:
       systemctl --user enable multivac-core
 FIN

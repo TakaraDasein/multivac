@@ -6,8 +6,16 @@ PartOf=multivac-core.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/1.Cyborg-Town/2.Daten-Town/Multivac/multivac
-ExecStart=%h/1.Cyborg-Town/2.Daten-Town/Multivac/multivac/.venv/bin/python -m multivac.ears
+# La ruta del proyecto NO está escrita aquí: sale de MULTIVAC_RAIZ, que
+# scripts/setup.sh deja en ~/.config/multivac/entorno con la ruta real del
+# clon. Así estas unidades sirven tal cual, esté el repositorio donde esté.
+EnvironmentFile=%h/.config/multivac/entorno
+# systemd no expande variables en el ejecutable de ExecStart (ha de ser una
+# ruta absoluta literal), de ahí el `sh -c`. El `exec` sustituye la shell por
+# Python: no queda proceso intermedio, y las señales y el código de salida
+# son los del servicio de verdad. El WorkingDirectory sobraba: la config se
+# localiza desde el propio paquete, no desde el directorio actual.
+ExecStart=/bin/sh -c 'exec "$MULTIVAC_RAIZ/.venv/bin/python" -m multivac.ears'
 Restart=on-failure
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1

@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# Módulo de waybar: estado de Multivac y onda de su voz.
-# Emite JSON en continuo (el módulo va sin "interval"); ver multivac/bar.py.
-set -uo pipefail
-
-RAIZ=$(dirname "$(dirname "$(readlink -f "$0")")")
-exec "$RAIZ/.venv/bin/python" -m multivac.bar
