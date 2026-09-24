@@ -13,6 +13,7 @@ import atexit
 import json
 import logging
 import os
+import signal
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 
@@ -37,6 +38,9 @@ class BusServer:
         self._handler = handler
         self._clients: dict[str, asyncio.StreamWriter] = {}
         self._server: asyncio.Server | None = None
+        # Se invoca con el rol de cada cliente que acaba de saludar, para que
+        # el core pueda ponerle al día sin esperar al siguiente cambio.
+        self.on_hello: Callable[[str], Awaitable[None]] | None = None
 
     async def start(self) -> None:
         path = socket_path()
@@ -45,12 +49,30 @@ class BusServer:
         path.unlink(missing_ok=True)
         self._server = await asyncio.start_unix_server(self._on_client, path=str(path))
         path.chmod(0o600)
-        # Al apagarse, el fichero sobrevive al proceso y los clientes que
-        # comprueban si existe antes de conectar (el plugin de la barra) se
-        # llevan un "connection refused" en vez de ver que no hay nadie. Se
-        # borra en cuanto el proceso termina, sea por señal o por excepción.
+        # El fichero del socket sobrevive al proceso, y un cliente que comprueba
+        # si existe antes de conectar —el plugin de la barra— se lleva entonces
+        # un "connection refused" en lugar de ver que no hay nadie escuchando.
+        #
+        # atexit solo cubre la salida normal, y la forma habitual de apagar esto
+        # es `systemctl --user stop`, que manda SIGTERM: sin atender la señal, el
+        # intérprete muere sin ejecutar nada y el fichero se queda ahí. Así que
+        # se atiende, se borra, y se deja morir al proceso.
         atexit.register(lambda: path.unlink(missing_ok=True))
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, self._on_signal, sig, path)
+
         log.info("bus escuchando en %s", path)
+
+    @staticmethod
+    def _on_signal(sig: int, path: Path) -> None:
+        log.info("señal %s: cierro el bus", signal.Signals(sig).name)
+        path.unlink(missing_ok=True)
+        # Se restaura el comportamiento por defecto y se reenvía la señal, para
+        # que systemd vea el mismo código de salida que vería sin este handler.
+        signal.signal(sig, signal.SIG_DFL)
+        os.kill(os.getpid(), sig)
 
     async def _on_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -62,6 +84,13 @@ class BusServer:
                     role = str(msg.get("role", "?"))
                     self._clients[role] = writer
                     log.info("cliente conectado: %s", role)
+                    # El estado solo se difunde cuando cambia, así que un
+                    # cliente que llega con Multivac ya en reposo —el caso
+                    # normal del plugin de la barra, que se conecta cuando le
+                    # apetece— se quedaría esperando un cambio que no llega y
+                    # mostrándose apagado. Se le pone al día al saludar.
+                    if self.on_hello is not None:
+                        await self.on_hello(role)
                     continue
                 msg.setdefault("from", role)
                 await self._handler(msg)

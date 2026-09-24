@@ -59,6 +59,7 @@ class Core:
     def __init__(self) -> None:
         self.agent = Agent()
         self.bus = BusServer(self.handle)
+        self.bus.on_hello = self._saludar
         self._busy = asyncio.Lock()
         self._unmute_guard: asyncio.Task | None = None
         self._apagar_al_terminar = False
@@ -68,6 +69,16 @@ class Core:
         # Identifica cada respuesta hablada: un speaking_done rezagado de una
         # respuesta anterior no debe reactivar el micro durante la siguiente.
         self._enunciado = 0
+
+    async def _saludar(self, role: str) -> None:
+        """Pone al día a un cliente recién conectado.
+
+        Sin esto, quien llega con Multivac ya en reposo no recibe nada hasta el
+        siguiente cambio de estado, y mientras tanto se pinta como si estuviera
+        apagada: es justo lo que le pasaba al widget de la barra, que se conecta
+        cuando el shell arranca y no cuando arranca el core.
+        """
+        await self.bus.send(role, {"type": "state", "state": self._estado})
 
     async def set_state(self, state: str) -> None:
         """Publica el estado y lo deja en disco para la barra de estado."""
